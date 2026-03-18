@@ -19,7 +19,7 @@ Go to the [Releases](../../releases) page and download the latest `FitGirl.Scrap
 
 3. **Click "Scrape Links"** — the app will find all the download links on the page
 
-4. **Pick a mirror** from the dropdown — the app supports both Datanodes and FuckingFast mirrors. Either works, pick whichever you prefer.
+4. **Pick a mirror** from the dropdown — the app supports both Datanodes and FuckingFast mirrors. Either works, pick whichever you prefer. (i would use fuckingfast if i was you)
 
 5. **Uncheck any files you don't want** — all files are checked by default. Uncheck any parts you don't need.
 
