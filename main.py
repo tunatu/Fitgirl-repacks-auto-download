@@ -32,13 +32,11 @@ def resolve_download(page_url):
         return None
 
 
-def get_filename(response, fallback="download.bin"):
-    cd = response.headers.get("content-disposition", "")
-    match = re.search(r'filename="?([^";\n]+)"?', cd)
-    if match:
-        return match.group(1).strip()
-    url_part = response.url.split("/")[-1].split("?")[0]
-    return url_part if url_part else fallback
+def get_filename_from_url(page_url):
+    if "#" in page_url:
+        return page_url.split("#")[-1]  # fuckingfast: fragment is the filename
+    return page_url.split("/")[-1]      # datanodes: last path segment
+
 
 def download_file(download_url, page_url, status_label):
     headers = {
@@ -56,9 +54,8 @@ def download_file(download_url, page_url, status_label):
     total = int(r.headers.get("content-length", 0))
     downloaded = 0
 
-    fallback = page_url.split("/")[-1].split("#")[-1] or "download.bin"
-    filename = get_filename(r, fallback=fallback)
-    output_path = os.path.join(download_dir.get(), filename + ".rar")
+    filename = get_filename_from_url(page_url)
+    output_path = os.path.join(download_dir.get(), filename)
     print(f"[*] Saving to: {output_path}")
 
     with open(output_path, "wb") as f:
@@ -97,10 +94,9 @@ def download_selected():
         failed = []
 
         for i, page_url in enumerate(to_download):
-            fname = page_url.split("/")[-1].split("#")[-1]
-            status = f"[{i+1}/{total}] Resolving: {fname}"
-            print(status)
-            result_label.config(text=status)
+            fname = get_filename_from_url(page_url)
+            result_label.config(text=f"[{i+1}/{total}] Resolving: {fname}")
+            print(f"[*] Resolving {i+1}/{total}: {fname}")
 
             download_url = resolve_download(page_url)
             if not download_url:
@@ -113,7 +109,7 @@ def download_selected():
                 failed.append(page_url)
 
         if failed:
-            result_label.config(text=f"Done. {len(failed)} failed: {', '.join(f.split('/')[-1] for f in failed)}")
+            result_label.config(text=f"Done. {len(failed)} failed: {', '.join(get_filename_from_url(f) for f in failed)}")
         else:
             result_label.config(text=f"All {total} files downloaded successfully.")
 
@@ -204,7 +200,6 @@ ttk.Label(root, text="Example: https://fitgirl-repacks.site/ready-or-not/", font
 
 ttk.Button(root, text="Scrape Links", command=get_links).pack(pady=8)
 
-# mirror selector
 mirror_frame = ttk.Frame(root)
 mirror_frame.pack(fill="x", padx=10)
 ttk.Label(mirror_frame, text="Mirror:").pack(side="left", padx=(0, 5))
@@ -213,7 +208,6 @@ mirror_menu = ttk.Combobox(mirror_frame, textvariable=mirror_var, state="readonl
 mirror_menu.pack(side="left")
 mirror_menu.bind("<<ComboboxSelected>>", on_mirror_change)
 
-# download location
 dir_frame = ttk.Frame(root)
 dir_frame.pack(fill="x", padx=10, pady=5)
 ttk.Label(dir_frame, text="Save to:").pack(side="left", padx=(0, 5))
