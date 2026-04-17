@@ -6,7 +6,6 @@ from ttkbootstrap.scrolled import ScrolledFrame
 from tkinter import filedialog, Toplevel
 import re
 import os
-import time
 
 _pause_event  = threading.Event()   
 _cancel_event = threading.Event()   
@@ -40,122 +39,65 @@ def get_filename_from_url(page_url):
     return page_url.split("/")[-1]
 
 
-MAX_RETRIES = 5
-RETRY_WAIT  = 5 
-
 def download_file(download_url, page_url, status_label):
-    base_headers = {
+    headers = {
         "Referer": page_url,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    filename    = get_filename_from_url(page_url)
+    print(f"[*] Downloading: {download_url}")
+    r = requests.get(download_url, stream=True, headers=headers, timeout=30)
+    print(f"[*] Status: {r.status_code} | Content-Type: {r.headers.get('content-type')}")
+
+    if r.status_code != 200:
+        status_label.config(text=f"Download failed: HTTP {r.status_code}")
+        return False
+
+    total      = int(r.headers.get("content-length", 0))
+    downloaded = 0
+    filename   = get_filename_from_url(page_url)
     output_path = os.path.join(download_dir.get(), filename)
     print(f"[*] Saving to: {output_path}")
 
-    try:
-        head = requests.head(download_url, headers=base_headers, timeout=15, allow_redirects=True)
-        total = int(head.headers.get("content-length", 0))
-    except Exception:
-        total = 0
-
-    attempt   = 0
-    file_mode = "wb"
-
-    while attempt < MAX_RETRIES:
-        downloaded = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-
-        if total and downloaded >= total:
-            status_label.config(text=f"Done: {filename}")
-            print(f"[+] Already complete: {output_path}")
-            return True
-
-        headers = dict(base_headers)
-        if downloaded:
-            headers["Range"] = f"bytes={downloaded}-"
-            file_mode = "ab"   # append
-            print(f"[*] Resuming from byte {downloaded}")
-        else:
-            file_mode = "wb"
-
-        try:
-            print(f"[*] Download attempt {attempt+1}/{MAX_RETRIES}: {download_url}")
-            r = requests.get(download_url, stream=True, headers=headers, timeout=30)
-            print(f"[*] Status: {r.status_code} | Content-Type: {r.headers.get('content-type')}")
-
-            if r.status_code == 200 and downloaded:
-                print("[!] Server ignored Range header — restarting from zero")
-                downloaded = 0
-                file_mode  = "wb"
-            elif r.status_code not in (200, 206):
-                status_label.config(text=f"Download failed: HTTP {r.status_code}")
-                return False
-
-            with open(output_path, file_mode) as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    if _cancel_event.is_set():
-                        r.close()
-                        status_label.config(text=f"Cancelled: {filename}")
-                        print(f"[!] Cancelled: {filename}")
-                        try:
-                            os.remove(output_path)
-                        except OSError:
-                            pass
-                        return None
-
-                    if not _pause_event.is_set():
-                        status_label.config(
-                            text=f"Paused: {filename} ({downloaded / (1024*1024):.1f} MB)"
-                        )
-                        _pause_event.wait()
-                        if _cancel_event.is_set():
-                            r.close()
-                            status_label.config(text=f"Cancelled: {filename}")
-                            try:
-                                os.remove(output_path)
-                            except OSError:
-                                pass
-                            return None
-
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total:
-                            percent  = (downloaded / total) * 100
-                            mb       = downloaded / (1024 * 1024)
-                            total_mb = total / (1024 * 1024)
-                            status_label.config(
-                                text=f"{filename}: {percent:.1f}%"
-                                     f" ({mb:.1f}/{total_mb:.1f} MB)"
-                                     f" [attempt {attempt+1}]"
-                            )
-
-            final_size = os.path.getsize(output_path)
-            if total and final_size < total:
-                raise IOError(f"Incomplete: got {final_size} of {total} bytes")
-
-            status_label.config(text=f"Done: {filename}")
-            print(f"[+] Done: {output_path}")
-            return True
-
-        except (requests.exceptions.ChunkedEncodingError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-                IOError) as e:
-            attempt += 1
-            if attempt >= MAX_RETRIES:
-                status_label.config(text=f"Failed after {MAX_RETRIES} retries: {filename}")
-                print(f"[-] Giving up on {filename}: {e}")
-                return False
-            status_label.config(
-                text=f"Retry {attempt}/{MAX_RETRIES} in {RETRY_WAIT}s: {filename}"
-            )
-            print(f"[!] Error ({e}), retrying in {RETRY_WAIT}s ({attempt}/{MAX_RETRIES})")
-            for _ in range(RETRY_WAIT * 10):
-                if _cancel_event.is_set():
+    with open(output_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=65536):
+            if _cancel_event.is_set():
+                r.close()
+                status_label.config(text=f"Cancelled: {filename}")
+                print(f"[!] Cancelled: {filename}")
+                try:
+                    os.remove(output_path)   
+                except OSError:
+                    pass
+                return None   
+            if not _pause_event.is_set():
+                status_label.config(
+                    text=f"Paused: {filename} ({downloaded / (1024*1024):.1f} MB downloaded)"
+                )
+                _pause_event.wait()          
+                if _cancel_event.is_set():   
+                    r.close()
+                    status_label.config(text=f"Cancelled: {filename}")
+                    try:
+                        os.remove(output_path)
+                    except OSError:
+                        pass
                     return None
-                time.sleep(0.1)
+            
 
-    return False
+            if chunk:
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    percent  = (downloaded / total) * 100
+                    mb       = downloaded / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    status_label.config(
+                        text=f"{filename}: {percent:.1f}% ({mb:.1f}/{total_mb:.1f} MB)"
+                    )
+
+    status_label.config(text=f"Done: {filename}")
+    print(f"[+] Done: {output_path}")
+    return True
 
 
 def browse_dir():
@@ -178,18 +120,18 @@ def _set_controls_state(downloading: bool):
 
 def toggle_pause():
     if _pause_event.is_set():
-        _pause_event.clear()          
+        _pause_event.clear()          # pause
         btn_pause.config(text="Resume")
         print("[*] Paused")
     else:
-        _pause_event.set()            
+        _pause_event.set()            # resume
         btn_pause.config(text="Pause")
         print("[*] Resumed")
 
 
 def cancel_download():
     _cancel_event.set()
-    _pause_event.set()
+    _pause_event.set()   # unblock a paused thread so it can see the cancel flag
     btn_pause.config(text="Pause")
     print("[!] Cancel requested")
 
@@ -214,6 +156,7 @@ def download_selected():
         ).pack(padx=20, pady=20)
         return
 
+    # Reset control events for the new run
     _cancel_event.clear()
     _pause_event.set()
 
@@ -240,9 +183,9 @@ def download_selected():
                 continue
 
             result = download_file(download_url, page_url, result_label)
-            if result is None:       
+            if result is None:       # cancelled
                 break
-            elif result is False:    
+            elif result is False:    # HTTP error
                 failed.append(page_url)
 
         if _cancel_event.is_set():
@@ -293,7 +236,8 @@ def get_links():
             if not mirror_groups:
                 result_label.config(text="No fuckingfast.co links found.")
                 return
-            
+            # ─────────────────────────────────────────────────────────────────
+
             mirror_options = [f"Mirror {i+1}: {host} ({len(links)} files)"
                               for i, (host, links) in enumerate(mirror_groups)]
             mirror_var.set(mirror_options[0])
@@ -348,7 +292,8 @@ ttk.Label(root, text="FitGirl Scraper", font=("Helvetica", 16, "bold")).pack(pad
 
 stringvar = ttk.StringVar()
 ttk.Entry(root, textvariable=stringvar, width=60).pack(pady=5)
-ttk.Label(root, text="Example: https://fitgirl-repacks.site/ready-or-not/",font=("Helvetica", 9)).pack()
+ttk.Label(root, text="Example: https://fitgirl-repacks.site/ready-or-not/",
+          font=("Helvetica", 9)).pack()
 
 ttk.Button(root, text="Scrape Links", command=get_links).pack(pady=8)
 
@@ -356,25 +301,34 @@ mirror_frame = ttk.Frame(root)
 mirror_frame.pack(fill="x", padx=10)
 ttk.Label(mirror_frame, text="Mirror:").pack(side="left", padx=(0, 5))
 mirror_var  = ttk.StringVar()
-mirror_menu = ttk.Combobox(mirror_frame, textvariable=mirror_var,state="readonly", width=50)
+mirror_menu = ttk.Combobox(mirror_frame, textvariable=mirror_var,
+                            state="readonly", width=50)
 mirror_menu.pack(side="left")
 mirror_menu.bind("<<ComboboxSelected>>", on_mirror_change)
+
 dir_frame = ttk.Frame(root)
 dir_frame.pack(fill="x", padx=10, pady=5)
 ttk.Label(dir_frame, text="Save to:").pack(side="left", padx=(0, 5))
 download_dir = ttk.StringVar(value=os.path.join(os.path.expanduser("~"), "Downloads"))
 ttk.Entry(dir_frame, textvariable=download_dir, width=42).pack(side="left")
-ttk.Button(dir_frame, text="Browse", command=browse_dir,bootstyle="secondary").pack(side="left", padx=5)
+ttk.Button(dir_frame, text="Browse", command=browse_dir,
+           bootstyle="secondary").pack(side="left", padx=5)
+
 result_label = ttk.Label(root, text="")
 result_label.pack(pady=5)
+
 scrollable_frame = ScrolledFrame(root, autohide=True)
 scrollable_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
 btn_row = ttk.Frame(root)
 btn_row.pack(pady=10)
+
 btn_download = ttk.Button(btn_row, text="Download Selected",command=download_selected, bootstyle="success")
 btn_download.pack(side="left", padx=6)
+
 btn_pause = ttk.Button(btn_row, text="Pause", command=toggle_pause,bootstyle="warning", state="disabled")
 btn_pause.pack(side="left", padx=6)
+
 btn_cancel = ttk.Button(btn_row, text="Cancel", command=cancel_download,bootstyle="danger", state="disabled")
 btn_cancel.pack(side="left", padx=6)
 root.mainloop()
