@@ -17,7 +17,7 @@ def get_fuckingfast_url(page_url):
     clean_url = page_url.split("#")[0]
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     r = requests.get(clean_url, headers=headers, timeout=15)
-    match = re.search(r'window\.open\("(https://fuckingfast\.co/dl/[^"]+)"', r.text)
+    match = re.search(r'window\.open\("(https://dl\.fuckingfast\.co/dl/[^"]+)"', r.text)
     if match:
         print(f"[+] FF dl URL: {match.group(1)}")
         return match.group(1)
