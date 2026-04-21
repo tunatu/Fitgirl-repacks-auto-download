@@ -17,7 +17,7 @@ def get_fuckingfast_url(page_url):
     clean_url = page_url.split("#")[0]
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     r = requests.get(clean_url, headers=headers, timeout=15)
-    match = re.search(r'window\.open\("(https://fuckingfast\.co/dl/[^"]+)"', r.text)
+    match = re.search(r'window\.open\("(https://dl\.fuckingfast\.co/dl/[^"]+)"', r.text)
     if match:
         print(f"[+] FF dl URL: {match.group(1)}")
         return match.group(1)
@@ -39,66 +39,88 @@ def get_filename_from_url(page_url):
     return page_url.split("/")[-1]
 
 
+from requests.exceptions import ChunkedEncodingError, ConnectionError
+
 def download_file(download_url, page_url, status_label):
     headers = {
         "Referer": page_url,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    print(f"[*] Downloading: {download_url}")
-    r = requests.get(download_url, stream=True, headers=headers, timeout=30)
-    print(f"[*] Status: {r.status_code} | Content-Type: {r.headers.get('content-type')}")
-
-    if r.status_code != 200:
-        status_label.config(text=f"Download failed: HTTP {r.status_code}")
-        return False
-
-    total      = int(r.headers.get("content-length", 0))
-    downloaded = 0
-    filename   = get_filename_from_url(page_url)
+    filename    = get_filename_from_url(page_url)
     output_path = os.path.join(download_dir.get(), filename)
-    print(f"[*] Saving to: {output_path}")
 
-    with open(output_path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=65536):
-            if _cancel_event.is_set():
-                r.close()
-                status_label.config(text=f"Cancelled: {filename}")
-                print(f"[!] Cancelled: {filename}")
-                try:
-                    os.remove(output_path)   
-                except OSError:
-                    pass
-                return None   
-            if not _pause_event.is_set():
-                status_label.config(
-                    text=f"Paused: {filename} ({downloaded / (1024*1024):.1f} MB downloaded)"
-                )
-                _pause_event.wait()          
-                if _cancel_event.is_set():   
-                    r.close()
-                    status_label.config(text=f"Cancelled: {filename}")
-                    try:
-                        os.remove(output_path)
-                    except OSError:
-                        pass
-                    return None
-            
+    MAX_RETRIES = 5
 
-            if chunk:
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    percent  = (downloaded / total) * 100
-                    mb       = downloaded / (1024 * 1024)
-                    total_mb = total / (1024 * 1024)
-                    status_label.config(
-                        text=f"{filename}: {percent:.1f}% ({mb:.1f}/{total_mb:.1f} MB)"
-                    )
+    for attempt in range(MAX_RETRIES):
+        # Resume from where we left off
+        downloaded = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        if downloaded:
+            headers["Range"] = f"bytes={downloaded}-"
+            print(f"[*] Resuming from {downloaded / (1024*1024):.1f} MB (attempt {attempt+1})")
+        else:
+            headers.pop("Range", None)
 
-    status_label.config(text=f"Done: {filename}")
-    print(f"[+] Done: {output_path}")
-    return True
+        try:
+            r = requests.get(download_url, stream=True, headers=headers, timeout=30)
 
+            # 206 = partial content (resume), 200 = full file
+            if r.status_code not in (200, 206):
+                status_label.config(text=f"HTTP {r.status_code}: {filename}")
+                return False
+
+            total = downloaded + int(r.headers.get("content-length", 0))
+
+            with open(output_path, "ab" if downloaded else "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    if _cancel_event.is_set():
+                        r.close()
+                        status_label.config(text=f"Cancelled: {filename}")
+                        try:
+                            os.remove(output_path)
+                        except OSError:
+                            pass
+                        return None
+
+                    if not _pause_event.is_set():
+                        status_label.config(
+                            text=f"Paused: {filename} ({downloaded / (1024*1024):.1f} MB)"
+                        )
+                        _pause_event.wait()
+                        if _cancel_event.is_set():
+                            r.close()
+                            status_label.config(text=f"Cancelled: {filename}")
+                            try:
+                                os.remove(output_path)
+                            except OSError:
+                                pass
+                            return None
+
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total:
+                            percent  = (downloaded / total) * 100
+                            mb       = downloaded / (1024 * 1024)
+                            total_mb = total / (1024 * 1024)
+                            status_label.config(
+                                text=f"{filename}: {percent:.1f}% ({mb:.1f}/{total_mb:.1f} MB)"
+                            )
+
+            status_label.config(text=f"Done: {filename}")
+            print(f"[+] Done: {output_path}")
+            return True
+
+        except (requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError) as e:
+            print(f"[!] Connection dropped (attempt {attempt+1}/{MAX_RETRIES}): {e}")
+            status_label.config(
+                text=f"Retrying {filename}... ({attempt+1}/{MAX_RETRIES})"
+            )
+            import time
+            time.sleep(3)  # wait before retry
+
+    status_label.config(text=f"Failed after {MAX_RETRIES} retries: {filename}")
+    return False
 
 def browse_dir():
     path = filedialog.askdirectory(initialdir=download_dir.get())
